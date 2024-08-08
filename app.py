@@ -1,6 +1,6 @@
 import streamlit as st
 from PIL import Image
-import os
+import io
 import numpy as np
 import cv2
 from potrace import Bitmap, POTRACE_TURNPOLICY_BLACK
@@ -15,24 +15,16 @@ except Exception as e:
     st.error(f"Error loading background removal model: {e}")
 
 def remove_background(image):
-    # Save the uploaded image temporarily
     temp_input_path = "temp_image.png"
     image.save(temp_input_path)
-
-    # Use the segmentation pipeline to remove background
     result = rmbg_pipe(temp_input_path)
     
-    # If result is directly an image object, return it
     if isinstance(result, Image.Image):
         return result
-
-    # Otherwise, handle other types of result (e.g., if it's a dictionary)
     if 'image' in result:
         return result['image']
     elif 'path' in result:
         return Image.open(result['path'])
-
-    # Handle unexpected result types
     raise ValueError("Unexpected result type from background removal pipeline")
 
 def enhance_edges(image, dilation_iterations=2, canny_threshold1=50, canny_threshold2=150, blur_ksize=5, erosion_iterations=1):
@@ -45,23 +37,17 @@ def enhance_edges(image, dilation_iterations=2, canny_threshold1=50, canny_thres
     return edges_image
 
 def get_unique_filename(directory: str, file_extension: str, fill_type: str):
-    # Create a pattern to match filenames
     pattern = f"*{fill_type}{file_extension}"
     existing_files = [f for f in os.listdir(directory) if f.endswith(file_extension) and fill_type in f]
-
-    # Extract the numbers from filenames and ignore non-integer filenames
     numbers = []
     for f in existing_files:
         try:
-            # Extract number from the filename
             number = int(os.path.splitext(f)[0].split('_')[0])
             numbers.append(number)
         except ValueError:
-            continue  # Ignore files that don't start with a number
-    
+            continue
     if not numbers:
         return "0"
-    
     max_number = max(numbers)
     return str(max_number + 1)
 
@@ -149,14 +135,14 @@ if "original_image" in st.session_state:
         st.image(enhanced_image, caption="Enhanced Image", use_column_width=True)
 
     if st.checkbox("Download Image"):
-        filename = get_unique_filename(os.path.expanduser("~/Downloads"), ".png")
+        filename = get_unique_filename(os.path.expanduser("~/Downloads"), ".png", "")
         downloads_output_path = os.path.expanduser("~/Downloads")
         os.makedirs(downloads_output_path, exist_ok=True)
         temp_image_path = os.path.join(downloads_output_path, f"{filename}.png")
         image.save(temp_image_path)
 
         with open(temp_image_path, "rb") as file:
-            btn = st.download_button(
+            st.download_button(
                 label="Download Image",
                 data=file,
                 file_name=f"{filename}.png",
@@ -169,14 +155,11 @@ if "original_image" in st.session_state:
         if "bg_removed_image" in st.session_state:
             image = st.session_state.bg_removed_image
 
-        # Get the fill type based on the selected style
         fill_type = "bw" if svg_style == "Black and White" else "filled"
         
-        # Get a unique number for the SVG file
         downloads_output_path = os.path.expanduser("~/Downloads")
         svg_filename = get_unique_filename(downloads_output_path, ".svg", fill_type)
         
-        # Save the SVG file
         svg_path = file_to_svg(image, svg_filename, downloads_output_path, fill_type)
         
         st.success(f"SVG saved as {svg_filename}_{fill_type}.svg in the Downloads folder.")
