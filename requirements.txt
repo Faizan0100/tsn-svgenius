@@ -7,3 +7,5 @@ potracer==0.0.4
 streamlit==1.36.0
 torch==2.3.1
 transformers==4.43.3
+torchvision
+scikit-image
