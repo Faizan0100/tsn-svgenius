@@ -1,12 +1,38 @@
 import streamlit as st
 from PIL import Image
-import io
 import numpy as np
+import os
 import cv2
+import tempfile
 from potrace import Bitmap, POTRACE_TURNPOLICY_BLACK
 from transformers import pipeline
 import torch
 from diffusers import DiffusionPipeline
+
+# Define options
+dimensional_options = ["2D", "3D"]
+
+def create_prompt(prompt, cartoon, fourk, dimensional_option):
+    options = []
+    if cartoon:
+        options.append("cartoon")
+    if fourk:
+        options.append("4k")
+    if dimensional_option:
+        options.append(dimensional_option.lower())
+    return f"{prompt}, {' '.join(options)}"
+
+def generate_image(prompt, cartoon, fourk, dimensional_option, num_inference_steps):
+    pipe = DiffusionPipeline.from_pretrained(
+        "playgroundai/playground-v2.5-1024px-aesthetic",
+        torch_dtype=torch.float16,
+        variant="fp16",
+    ).to("cuda")
+    
+    combined_prompt = create_prompt(prompt, cartoon, fourk, dimensional_option)
+    
+    image = pipe(prompt=combined_prompt, num_inference_steps=num_inference_steps, guidance_scale=3).images[0]
+    return image
 
 # Load the image-segmentation pipeline for background removal
 try:
@@ -15,10 +41,9 @@ except Exception as e:
     st.error(f"Error loading background removal model: {e}")
 
 def remove_background(image):
-    temp_input_path = "temp_image.png"
-    image.save(temp_input_path)
-    result = rmbg_pipe(temp_input_path)
-    
+    if not isinstance(image, Image.Image):
+        raise TypeError("Input image must be a PIL image")
+    result = rmbg_pipe(image)
     if isinstance(result, Image.Image):
         return result
     if 'image' in result:
@@ -35,21 +60,6 @@ def enhance_edges(image, dilation_iterations=2, canny_threshold1=50, canny_thres
     refined_edges = cv2.erode(dilated_edges, np.ones((3, 3), np.uint8), iterations=erosion_iterations)
     edges_image = Image.fromarray(refined_edges)
     return edges_image
-
-def get_unique_filename(directory: str, file_extension: str, fill_type: str):
-    pattern = f"*{fill_type}{file_extension}"
-    existing_files = [f for f in os.listdir(directory) if f.endswith(file_extension) and fill_type in f]
-    numbers = []
-    for f in existing_files:
-        try:
-            number = int(os.path.splitext(f)[0].split('_')[0])
-            numbers.append(number)
-        except ValueError:
-            continue
-    if not numbers:
-        return "0"
-    max_number = max(numbers)
-    return str(max_number + 1)
 
 def file_to_svg(image, filename: str, output_dir: str, fill_type: str):
     enhanced_image = enhance_edges(image)
@@ -89,19 +99,6 @@ def file_to_svg(image, filename: str, output_dir: str, fill_type: str):
         fp.write("</svg>")
     return output_path
 
-def generate_image(prompt):
-    pipe = DiffusionPipeline.from_pretrained(
-        "playgroundai/playground-v2.5-1024px-aesthetic",
-        torch_dtype=torch.float16,
-        variant="fp16",
-    ).to("cuda")
-    image = pipe(prompt=prompt, num_inference_steps=50, guidance_scale=3).images[0]
-    return image
-
-# Initialize session state for SVG file counter
-if 'svg_counter' not in st.session_state:
-    st.session_state.svg_counter = 0
-
 # Streamlit app
 st.title("Image to SVG Converter")
 
@@ -115,9 +112,40 @@ if image_source == "Upload Image":
         st.image(uploaded_image, caption="Uploaded Image", use_column_width=True)
 
 elif image_source == "Generate Image":
-    prompt = st.text_input("Enter a prompt for image generation")
+    prompt = st.text_input("Enter your prompt:")
+    
+    # Options for image generation
+    cartoon = st.checkbox("Cartoon")
+    fourk = st.checkbox("4K")
+    dimensional_option = st.selectbox("Dimensional option:", dimensional_options)
+    
+    # Add slider for num_inference_steps
+    num_inference_steps = st.slider("Number of inference steps (20-50)", min_value=20, max_value=50, value=50)
+    
+    # Display advantages and disadvantages
+    st.subheader(f"Inference Steps: {num_inference_steps}")
+    st.write("Advantages:")
+    if num_inference_steps < 50:
+        st.write("- Faster generation time")
+        st.write("- Lower computational resource usage")
+    elif num_inference_steps > 50:
+        st.write("- Potentially higher image quality")
+        st.write("- More refined details in the generated image")
+    else:
+        st.write("- Balanced approach between speed and quality")
+    
+    st.write("Disadvantages:")
+    if num_inference_steps < 50:
+        st.write("- Potentially lower image quality")
+        st.write("- Less refined details in the generated image")
+    elif num_inference_steps > 50:
+        st.write("- Longer generation time")
+        st.write("- Higher computational resource usage")
+    else:
+        st.write("- May not fully optimize for either speed or quality")
+
     if st.button("Generate Image"):
-        generated_image = generate_image(prompt)
+        generated_image = generate_image(prompt, cartoon, fourk, dimensional_option, num_inference_steps)
         st.session_state.original_image = generated_image
         st.image(generated_image, caption="Generated Image", use_column_width=True)
 
@@ -134,39 +162,34 @@ if "original_image" in st.session_state:
         enhanced_image = enhance_edges(image)
         st.image(enhanced_image, caption="Enhanced Image", use_column_width=True)
 
-    if st.checkbox("Download Image"):
-        filename = get_unique_filename(os.path.expanduser("~/Downloads"), ".png", "")
-        downloads_output_path = os.path.expanduser("~/Downloads")
-        os.makedirs(downloads_output_path, exist_ok=True)
-        temp_image_path = os.path.join(downloads_output_path, f"{filename}.png")
-        image.save(temp_image_path)
-
-        with open(temp_image_path, "rb") as file:
-            st.download_button(
-                label="Download Image",
-                data=file,
-                file_name=f"{filename}.png",
-                mime="image/png"
-            )
-
     # Add option to choose SVG style
     svg_style = st.radio("Select SVG Style", ("Black and White", "Filled"))
     if st.button("Convert to SVG"):
         if "bg_removed_image" in st.session_state:
             image = st.session_state.bg_removed_image
+        else:
+            image = st.session_state.original_image
 
         fill_type = "bw" if svg_style == "Black and White" else "filled"
         
-        downloads_output_path = os.path.expanduser("~/Downloads")
-        svg_filename = get_unique_filename(downloads_output_path, ".svg", fill_type)
+        # Create a temporary file to store the SVG
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.svg') as tmp_file:
+            svg_filename = os.path.basename(tmp_file.name)
+            svg_path = file_to_svg(image, svg_filename, os.path.dirname(tmp_file.name), fill_type)
         
-        svg_path = file_to_svg(image, svg_filename, downloads_output_path, fill_type)
+        # Read the SVG file
+        with open(svg_path, "r") as file:
+            svg_content = file.read()
         
-        st.success(f"SVG saved as {svg_filename}_{fill_type}.svg in the Downloads folder.")
-        with open(svg_path, "rb") as file:
-            st.download_button(
-                label="Download SVG",
-                data=file,
-                file_name=f"{svg_filename}_{fill_type}.svg",
-                mime="image/svg+xml"
-            )
+        # Offer the SVG file for download
+        st.download_button(
+            label="Download SVG",
+            data=svg_content,
+            file_name=f"{svg_filename}_{fill_type}.svg",
+            mime="image/svg+xml"
+        )
+        
+        # Clean up the temporary file
+        os.unlink(svg_path)
+
+        st.success(f"SVG conversion complete. Click the 'Download SVG' button to save the file.")
