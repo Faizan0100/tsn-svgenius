@@ -45,6 +45,9 @@ def enhance_edges(image, dilation_iterations=2, canny_threshold1=50, canny_thres
     return edges_image
 
 def get_unique_filename(directory: str, file_extension: str, fill_type: str):
+    if not os.path.exists(directory):
+        os.makedirs(directory)
+
     # Create a pattern to match filenames
     pattern = f"*{fill_type}{file_extension}"
     existing_files = [f for f in os.listdir(directory) if f.endswith(file_extension) and fill_type in f]
@@ -149,7 +152,7 @@ if "original_image" in st.session_state:
         st.image(enhanced_image, caption="Enhanced Image", use_column_width=True)
 
     if st.checkbox("Download Image"):
-        filename = get_unique_filename(os.path.expanduser("~/Downloads"), ".png")
+        filename = get_unique_filename(os.path.expanduser("~/Downloads"), ".png", "")
         downloads_output_path = os.path.expanduser("~/Downloads")
         os.makedirs(downloads_output_path, exist_ok=True)
         temp_image_path = os.path.join(downloads_output_path, f"{filename}.png")
@@ -174,6 +177,7 @@ if "original_image" in st.session_state:
         
         # Get a unique number for the SVG file
         downloads_output_path = os.path.expanduser("~/Downloads")
+        os.makedirs(downloads_output_path, exist_ok=True)
         svg_filename = get_unique_filename(downloads_output_path, ".svg", fill_type)
         
         # Save the SVG file
