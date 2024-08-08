@@ -1,7 +1,7 @@
 diffusers==0.30.0
 numpy==2.0.1
-opencv_python==4.10.0.84
-opencv_python_headless==4.10.0.84
+opencv-python==4.10.0.84
+opencv-python-headless==4.10.0.84
 Pillow==10.4.0
 potracer==0.0.4
 streamlit==1.36.0
