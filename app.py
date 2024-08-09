@@ -5,13 +5,13 @@ import os
 import cv2
 import tempfile
 from potrace import Bitmap, POTRACE_TURNPOLICY_BLACK
-from transformers import pipeline
 import torch
+import huggingface_hub
 from diffusers import DiffusionPipeline
+from transformers.pipelines import pipeline
 
-# Check CUDA availability
-DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-print(f"Using device: {DEVICE}")
+# Increase timeout for model downloads
+huggingface_hub.constants.HF_HUB_DOWNLOAD_TIMEOUT = 900  # 15 minutes
 
 # Define options
 dimensional_options = ["2D", "3D"]
@@ -29,15 +29,16 @@ def create_prompt(prompt, cartoon, fourk, dimensional_option):
 @st.cache_resource
 def load_diffusion_pipeline():
     try:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
         pipe = DiffusionPipeline.from_pretrained(
             "playgroundai/playground-v2.5-1024px-aesthetic",
-            torch_dtype=torch.float16 if DEVICE == "cuda" else torch.float32,
-            variant="fp16" if DEVICE == "cuda" else None,
-            disable_progress_bar=True
-        ).to(DEVICE)
+            torch_dtype=torch.float16 if device == "cuda" else torch.float32,
+            variant="fp16" if device == "cuda" else None,
+            resume_download=True,
+        ).to(device)
         return pipe
     except Exception as e:
-        st.error(f"Error loading DiffusionPipeline: {e}")
+        st.error(f"Error loading DiffusionPipeline: {str(e)}")
         return None
 
 def generate_image(prompt, cartoon, fourk, dimensional_option, num_inference_steps):
@@ -51,11 +52,11 @@ def generate_image(prompt, cartoon, fourk, dimensional_option, num_inference_ste
         image = pipe(prompt=combined_prompt, num_inference_steps=num_inference_steps, guidance_scale=3).images[0]
         return image
     except Exception as e:
-        st.error(f"Error generating image: {e}")
+        st.error(f"Error generating image: {str(e)}")
         return None
 
 @st.cache_resource
-def load_background_removal_model():
+def load_rmbg_pipeline():
     try:
         return pipeline("image-segmentation", model="briaai/RMBG-1.4", trust_remote_code=True)
     except Exception as e:
@@ -65,11 +66,9 @@ def load_background_removal_model():
 def remove_background(image):
     if not isinstance(image, Image.Image):
         raise TypeError("Input image must be a PIL image")
-    
-    rmbg_pipe = load_background_removal_model()
+    rmbg_pipe = load_rmbg_pipeline()
     if rmbg_pipe is None:
         return image
-    
     result = rmbg_pipe(image)
     if isinstance(result, Image.Image):
         return result
@@ -146,20 +145,33 @@ elif image_source == "Generate Image":
     fourk = st.checkbox("4K")
     dimensional_option = st.selectbox("Dimensional option:", dimensional_options)
     
+    # Add slider for num_inference_steps
     num_inference_steps = st.slider("Number of inference steps (20-50)", min_value=20, max_value=50, value=50)
     
+    # Display advantages and disadvantages
     st.subheader(f"Inference Steps: {num_inference_steps}")
-    st.write("Advantages and Disadvantages:")
-    if num_inference_steps < 35:
-        st.write("- Faster generation, but potentially lower quality")
-    elif num_inference_steps > 35:
-        st.write("- Higher quality, but longer generation time")
+    st.write("Advantages:")
+    if num_inference_steps < 50:
+        st.write("- Faster generation time")
+        st.write("- Lower computational resource usage")
+    elif num_inference_steps > 50:
+        st.write("- Potentially higher image quality")
+        st.write("- More refined details in the generated image")
     else:
         st.write("- Balanced approach between speed and quality")
+    
+    st.write("Disadvantages:")
+    if num_inference_steps < 50:
+        st.write("- Potentially lower image quality")
+        st.write("- Less refined details in the generated image")
+    elif num_inference_steps > 50:
+        st.write("- Longer generation time")
+        st.write("- Higher computational resource usage")
+    else:
+        st.write("- May not fully optimize for either speed or quality")
 
     if st.button("Generate Image"):
-        with st.spinner("Generating image..."):
-            generated_image = generate_image(prompt, cartoon, fourk, dimensional_option, num_inference_steps)
+        generated_image = generate_image(prompt, cartoon, fourk, dimensional_option, num_inference_steps)
         if generated_image is not None:
             st.session_state.original_image = generated_image
             st.image(generated_image, caption="Generated Image", use_column_width=True)
@@ -167,42 +179,44 @@ elif image_source == "Generate Image":
 if "original_image" in st.session_state:
     image = st.session_state.original_image
     if st.button("Remove Background"):
-        with st.spinner("Removing background..."):
-            image = remove_background(image)
+        image = remove_background(image)
         st.session_state.bg_removed_image = image
         st.image(image, caption="Image with Background Removed", use_column_width=True)
 
     if st.button("Show Enhanced Image"):
-        with st.spinner("Enhancing image..."):
-            if "bg_removed_image" in st.session_state:
-                image = st.session_state.bg_removed_image
-            enhanced_image = enhance_edges(image)
+        if "bg_removed_image" in st.session_state:
+            image = st.session_state.bg_removed_image
+        enhanced_image = enhance_edges(image)
         st.image(enhanced_image, caption="Enhanced Image", use_column_width=True)
 
+    # Add option to choose SVG style
     svg_style = st.radio("Select SVG Style", ("Black and White", "Filled"))
     if st.button("Convert to SVG"):
-        with st.spinner("Converting to SVG..."):
-            if "bg_removed_image" in st.session_state:
-                image = st.session_state.bg_removed_image
-            else:
-                image = st.session_state.original_image
+        if "bg_removed_image" in st.session_state:
+            image = st.session_state.bg_removed_image
+        else:
+            image = st.session_state.original_image
 
-            fill_type = "bw" if svg_style == "Black and White" else "filled"
-            
-            with tempfile.NamedTemporaryFile(delete=False, suffix='.svg') as tmp_file:
-                svg_filename = os.path.basename(tmp_file.name)
-                svg_path = file_to_svg(image, svg_filename, os.path.dirname(tmp_file.name), fill_type)
-            
-            with open(svg_path, "r") as file:
-                svg_content = file.read()
-            
-            st.download_button(
-                label="Download SVG",
-                data=svg_content,
-                file_name=f"{svg_filename}_{fill_type}.svg",
-                mime="image/svg+xml"
-            )
-            
-            os.unlink(svg_path)
+        fill_type = "bw" if svg_style == "Black and White" else "filled"
+        
+        # Create a temporary file to store the SVG
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.svg') as tmp_file:
+            svg_filename = os.path.basename(tmp_file.name)
+            svg_path = file_to_svg(image, svg_filename, os.path.dirname(tmp_file.name), fill_type)
+        
+        # Read the SVG file
+        with open(svg_path, "r") as file:
+            svg_content = file.read()
+        
+        # Offer the SVG file for download
+        st.download_button(
+            label="Download SVG",
+            data=svg_content,
+            file_name=f"{svg_filename}_{fill_type}.svg",
+            mime="image/svg+xml"
+        )
+        
+        # Clean up the temporary file
+        os.unlink(svg_path)
 
         st.success(f"SVG conversion complete. Click the 'Download SVG' button to save the file.")
