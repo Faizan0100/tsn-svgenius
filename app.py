@@ -1,34 +1,45 @@
+"""
+This module provides functionality for image processing and SVG conversion.
+It includes image generation, background removal, edge enhancement, and SVG conversion.
+"""
+
+import os
+import tempfile
+from functools import lru_cache
+
+import cv2
+import numpy as np
 import streamlit as st
 from PIL import Image
-import numpy as np
-import os
-import cv2
-import tempfile
-from potrace import Bitmap, POTRACE_TURNPOLICY_BLACK
 import torch
 import huggingface_hub
 from diffusers import DiffusionPipeline
 from transformers.pipelines import pipeline
-from functools import lru_cache
+from potrace import Bitmap, POTRACE_TURNPOLICY_BLACK
+
+# Disable no-member warning for cv2
+# pylint: disable=no-member
 
 # Increase timeout for model downloads
 huggingface_hub.constants.HF_HUB_DOWNLOAD_TIMEOUT = 900  # 15 minutes
 
 # Define options
-dimensional_options = ["2D", "3D"]
+DIMENSIONAL_OPTIONS = ["2D", "3D"]
 
-def create_prompt(prompt, cartoon, fourk, dimensional_option):
+def create_prompt(user_prompt, is_cartoon, is_fourk, dim_option):
+    """Create a combined prompt based on user selections."""
     options = []
-    if cartoon:
+    if is_cartoon:
         options.append("cartoon")
-    if fourk:
+    if is_fourk:
         options.append("4k")
-    if dimensional_option:
-        options.append(dimensional_option.lower())
-    return f"{prompt}, {' '.join(options)}"
+    if dim_option:
+        options.append(dim_option.lower())
+    return f"{user_prompt}, {' '.join(options)}"
 
 @st.cache_resource
 def load_diffusion_pipeline():
+    """Load the diffusion pipeline."""
     try:
         device = "cuda" if torch.cuda.is_available() else "cpu"
         pipe = DiffusionPipeline.from_pretrained(
@@ -38,63 +49,112 @@ def load_diffusion_pipeline():
             resume_download=True,
         ).to(device)
         return pipe
-    except Exception as e:
+    except RuntimeError as e:
         st.error(f"Error loading DiffusionPipeline: {str(e)}")
         return None
-    
+
 @st.cache_data
 @lru_cache(maxsize=32)
-def generate_image(prompt, cartoon, fourk, dimensional_option, num_inference_steps):
+def generate_image(user_prompt, is_cartoon, is_fourk, dim_option, steps):
+    """Generate an image based on the given parameters."""
     pipe = load_diffusion_pipeline()
     if pipe is None:
         return None
-    
-    combined_prompt = create_prompt(prompt, cartoon, fourk, dimensional_option)
-    
+
+    combined_prompt = create_prompt(user_prompt, is_cartoon, is_fourk, dim_option)
+
     try:
-        # Adjust the guidance scale
         guidance_scale = 2.5
-        
-        image = pipe(prompt=combined_prompt, num_inference_steps=num_inference_steps, guidance_scale=guidance_scale).images[0]
-        return image
-    except Exception as e:
+        result_image = pipe(
+            prompt=combined_prompt,
+            num_inference_steps=steps,
+            guidance_scale=guidance_scale
+        ).images[0]
+        return result_image
+    except RuntimeError as e:
         st.error(f"Error generating image: {str(e)}")
         return None
+
 @st.cache_resource
 def load_rmbg_pipeline():
+    """Load the background removal pipeline."""
     try:
         return pipeline("image-segmentation", model="briaai/RMBG-1.4", trust_remote_code=True)
-    except Exception as e:
+    except RuntimeError as e:
         st.error(f"Error loading background removal model: {e}")
         return None
+
 @st.cache_data
-def remove_background(image):
-    if not isinstance(image, Image.Image):
+def remove_background(input_image):
+    """Remove the background from the given image."""
+    if not isinstance(input_image, Image.Image):
         raise TypeError("Input image must be a PIL image")
     rmbg_pipe = load_rmbg_pipeline()
     if rmbg_pipe is None:
-        return image
-    result = rmbg_pipe(image)
+        return input_image
+    result = rmbg_pipe(input_image)
     if isinstance(result, Image.Image):
         return result
     if 'image' in result:
         return result['image']
-    elif 'path' in result:
+    if 'path' in result:
         return Image.open(result['path'])
     raise ValueError("Unexpected result type from background removal pipeline")
-@st.cache_data
-def enhance_edges(image, dilation_iterations=2, canny_threshold1=50, canny_threshold2=150, blur_ksize=5, erosion_iterations=1):
-    gray_image = np.array(image.convert("L"))
-    blurred_image = cv2.GaussianBlur(gray_image, (blur_ksize, blur_ksize), 0)
-    edges = cv2.Canny(blurred_image, threshold1=canny_threshold1, threshold2=canny_threshold2)
-    dilated_edges = cv2.dilate(edges, np.ones((3, 3), np.uint8), iterations=dilation_iterations)
-    refined_edges = cv2.erode(dilated_edges, np.ones((3, 3), np.uint8), iterations=erosion_iterations)
-    edges_image = Image.fromarray(refined_edges)
-    return edges_image
 
-def file_to_svg(image, filename: str, output_dir: str, fill_type: str):
-    enhanced_image = enhance_edges(image)
-    bitmap_data = np.array(enhanced_image, dtype=np.uint8)
+@st.cache_data
+def enhance_edges(input_image, edge_params=None):
+    """Enhance the edges of the given image."""
+    if edge_params is None:
+        edge_params = {
+            'dilation_iterations': 2,
+            'canny_threshold1': 50,
+            'canny_threshold2': 150,
+            'blur_ksize': 5,
+            'erosion_iterations': 1
+        }
+    gray_image = np.array(input_image.convert("L"))
+    blurred_image = cv2.GaussianBlur(
+        gray_image,
+        (edge_params['blur_ksize'], edge_params['blur_ksize']),
+        0
+    )
+    edges = cv2.Canny(
+        blurred_image,
+        edge_params['canny_threshold1'],
+        edge_params['canny_threshold2']
+    )
+    dilated_edges = cv2.dilate(
+        edges,
+        np.ones((3, 3), np.uint8),
+        iterations=edge_params['dilation_iterations']
+    )
+    refined_edges = cv2.erode(
+        dilated_edges,
+        np.ones((3, 3), np.uint8),
+        iterations=edge_params['erosion_iterations']
+    )
+    return Image.fromarray(refined_edges)
+
+def create_svg_path(curve):
+    """Create SVG path from a curve."""
+    parts = []
+    start_point = curve.start_point
+    parts.append(f"M{start_point.x},{start_point.y}")
+    for segment in curve.segments:
+        if segment.is_corner:
+            a = segment.c
+            b = segment.end_point
+            parts.append(f"L{a.x},{a.y}L{b.x},{b.y}")
+        else:
+            a, b, c = segment.c1, segment.c2, segment.end_point
+            parts.append(f"C{a.x},{a.y} {b.x},{b.y} {c.x},{c.y}")
+    parts.append("z")
+    return "".join(parts)
+
+def file_to_svg(input_image, filename, output_dir, svg_fill_type):
+    """Convert the image to SVG format."""
+    edge_enhanced_image = enhance_edges(input_image)
+    bitmap_data = np.array(edge_enhanced_image, dtype=np.uint8)
     bitmap = Bitmap(bitmap_data)
     path = bitmap.trace(
         turdsize=1,
@@ -103,37 +163,32 @@ def file_to_svg(image, filename: str, output_dir: str, fill_type: str):
         opticurve=False,
         opttolerance=0.1
     )
-    
-    output_path = os.path.join(output_dir, f"{filename}_{fill_type}.svg")
-    with open(output_path, "w") as fp:
+
+    output_path = os.path.join(output_dir, f"{filename}_{svg_fill_type}.svg")
+    with open(output_path, "w", encoding="utf-8") as fp:
         fp.write(
-            f'<svg version="1.1" xmlns="http://www.w3.org/2000/svg" width="{bitmap_data.shape[1]}" height="{bitmap_data.shape[0]}">')
+            f'<svg version="1.1" xmlns="http://www.w3.org/2000/svg" '
+            f'width="{bitmap_data.shape[1]}" height="{bitmap_data.shape[0]}">'
+        )
         for curve in path:
-            parts = []
-            fs = curve.start_point
-            parts.append(f"M{fs.x},{fs.y}")
-            for segment in curve.segments:
-                if segment.is_corner:
-                    a = segment.c
-                    b = segment.end_point
-                    parts.append(f"L{a.x},{a.y}L{b.x},{b.y}")
-                else:
-                    a = segment.c1
-                    b = segment.c2
-                    c = segment.end_point
-                    parts.append(f"C{a.x},{a.y} {b.x},{b.y} {c.x},{c.y}")
-            parts.append("z")
-            if fill_type == "bw":
-                fp.write(f'<path d="{"".join(parts)}" fill="none" stroke="black" stroke-width="1"/>')
-            elif fill_type == "filled":
-                fp.write(f'<path d="{"".join(parts)}" fill="black" stroke="none" stroke-width="1"/>')
+            svg_path = create_svg_path(curve)
+            if svg_fill_type == "bw":
+                fp.write(
+                    f'<path d="{svg_path}" fill="none" '
+                    f'stroke="black" stroke-width="1"/>'
+                )
+            elif svg_fill_type == "filled":
+                fp.write(
+                    f'<path d="{svg_path}" fill="black" '
+                    f'stroke="none" stroke-width="1"/>'
+                )
         fp.write("</svg>")
     return output_path
 
 # Streamlit app
 st.title("Image to SVG Converter")
 
-image_source = st.radio("", ("Upload Image", "Generate Image"))
+image_source = st.radio("Select image source:", ("Upload Image", "Generate Image"))
 
 if image_source == "Upload Image":
     uploaded_file = st.file_uploader("Choose an image file", type=["png", "jpg", "jpeg"])
@@ -144,15 +199,20 @@ if image_source == "Upload Image":
 
 elif image_source == "Generate Image":
     prompt = st.text_input("Enter your prompt:")
-    
+
     # Options for image generation
     cartoon = st.checkbox("Cartoon")
     fourk = st.checkbox("4K")
-    dimensional_option = st.selectbox("Dimensional option:", dimensional_options)
-    
+    dimensional_option = st.selectbox("Dimensional option:", DIMENSIONAL_OPTIONS)
+
     # Add slider for num_inference_steps
-    num_inference_steps = st.slider("Number of inference steps (20-50)", min_value=20, max_value=50, value=50)
-    
+    num_inference_steps = st.slider(
+        "Number of inference steps (20-50)",
+        min_value=20,
+        max_value=50,
+        value=50
+    )
+
     # Display advantages and disadvantages
     st.subheader(f"Inference Steps: {num_inference_steps}")
     st.write("Advantages:")
@@ -164,7 +224,7 @@ elif image_source == "Generate Image":
         st.write("- More refined details in the generated image")
     else:
         st.write("- Balanced approach between speed and quality")
-    
+
     st.write("Disadvantages:")
     if num_inference_steps < 50:
         st.write("- Potentially lower image quality")
@@ -176,52 +236,62 @@ elif image_source == "Generate Image":
         st.write("- May not fully optimize for either speed or quality")
 
     if st.button("Generate Image"):
-        generated_image = generate_image(prompt, cartoon, fourk, dimensional_option, num_inference_steps)
-        if generated_image is not None:
-            st.session_state.original_image = generated_image
-            st.image(generated_image, caption="Generated Image", use_column_width=True)
+        generated_result = generate_image(
+            prompt, cartoon, fourk, dimensional_option, num_inference_steps
+        )
+        if generated_result is not None:
+            st.session_state.original_image = generated_result
+            st.image(generated_result, caption="Generated Image", use_column_width=True)
 
 if "original_image" in st.session_state:
-    image = st.session_state.original_image
+    current_image = st.session_state.original_image
     if st.button("Remove Background"):
-        image = remove_background(image)
-        st.session_state.bg_removed_image = image
-        st.image(image, caption="Image with Background Removed", use_column_width=True)
+        current_image = remove_background(current_image)
+        st.session_state.bg_removed_image = current_image
+        st.image(current_image, caption="Image with Background Removed", use_column_width=True)
 
     if st.button("Show Enhanced Image"):
         if "bg_removed_image" in st.session_state:
-            image = st.session_state.bg_removed_image
-        enhanced_image = enhance_edges(image)
-        st.image(enhanced_image, caption="Enhanced Image", use_column_width=True)
+            current_image = st.session_state.bg_removed_image
+        edge_enhanced_result = enhance_edges(current_image)
+        st.image(edge_enhanced_result, caption="Enhanced Image", use_column_width=True)
 
     # Add option to choose SVG style
     svg_style = st.radio("Select SVG Style", ("Black and White", "Filled"))
     if st.button("Convert to SVG"):
         if "bg_removed_image" in st.session_state:
-            image = st.session_state.bg_removed_image
+            current_image = st.session_state.bg_removed_image
         else:
-            image = st.session_state.original_image
+            current_image = st.session_state.original_image
 
-        fill_type = "bw" if svg_style == "Black and White" else "filled"
-        
+        SVG_FILL_TYPE = "bw" if svg_style == "Black and White" else "filled"
+
         # Create a temporary file to store the SVG
         with tempfile.NamedTemporaryFile(delete=False, suffix='.svg') as tmp_file:
             svg_filename = os.path.basename(tmp_file.name)
-            svg_path = file_to_svg(image, svg_filename, os.path.dirname(tmp_file.name), fill_type)
-        
+            svg_output_path = file_to_svg(
+                current_image,
+                svg_filename,
+                os.path.dirname(tmp_file.name),
+                SVG_FILL_TYPE
+            )
+
         # Read the SVG file
-        with open(svg_path, "r") as file:
+        with open(svg_output_path, "r", encoding="utf-8") as file:
             svg_content = file.read()
-        
+
         # Offer the SVG file for download
         st.download_button(
             label="Download SVG",
             data=svg_content,
-            file_name=f"{svg_filename}_{fill_type}.svg",
+            file_name=f"{svg_filename}_{SVG_FILL_TYPE}.svg",
             mime="image/svg+xml"
         )
-        
-        # Clean up the temporary file
-        os.unlink(svg_path)
 
-        st.success(f"SVG conversion complete. Click the 'Download SVG' button to save the file.")
+        # Clean up the temporary file
+        os.unlink(svg_output_path)
+
+        st.success("SVG conversion complete. Click the 'Download SVG' button to save the file.")
+
+    
+           
