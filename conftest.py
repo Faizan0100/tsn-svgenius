@@ -1,3 +1,7 @@
+"""
+This module sets up pytest configuration and fixtures.
+"""
+
 import sys
 import os
 
