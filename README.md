@@ -13,6 +13,23 @@ The Image to SVG Converter is a powerful Streamlit application that allows users
 - **SVG Conversion**: Convert images to SVG format with options for filled or outline styles.
 - **Download Options**: Download processed images and SVG files.
 
+## Using GitHub Codespaces
+
+This project is configured to work with GitHub Codespaces. To use it:
+
+1. Click the "Code" button on the GitHub repository page.
+2. Select the "Codespaces" tab.
+3. Click "Create codespace on main".
+4. Wait for the codespace to be created and the environment to be set up.
+5. Once the codespace is ready, open a new terminal and run:
+
+   ```
+   conda activate svgenius
+   streamlit run app.py
+   ```
+6. Click the "Open in Browser" button when prompted to view the Streamlit app.
+
+
 ## Installation
 
 1. Clone this repository:
