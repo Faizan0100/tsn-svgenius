@@ -35,7 +35,7 @@ def create_prompt(user_prompt, is_cartoon, is_fourk, dim_option):
         options.append("4k")
     if dim_option:
         options.append(dim_option.lower())
-    return f"{user_prompt}, {' '.join(options)}"
+    return f"{user_prompt}, {', '.join(options)}"
 
 @st.cache_resource
 def load_diffusion_pipeline():
