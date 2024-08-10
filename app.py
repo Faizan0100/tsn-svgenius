@@ -9,6 +9,7 @@ import torch
 import huggingface_hub
 from diffusers import DiffusionPipeline
 from transformers.pipelines import pipeline
+from functools import lru_cache
 
 # Increase timeout for model downloads
 huggingface_hub.constants.HF_HUB_DOWNLOAD_TIMEOUT = 900  # 15 minutes
@@ -40,7 +41,9 @@ def load_diffusion_pipeline():
     except Exception as e:
         st.error(f"Error loading DiffusionPipeline: {str(e)}")
         return None
+    
 @st.cache_data
+@lru_cache(maxsize=32)
 def generate_image(prompt, cartoon, fourk, dimensional_option, num_inference_steps):
     pipe = load_diffusion_pipeline()
     if pipe is None:
@@ -49,12 +52,14 @@ def generate_image(prompt, cartoon, fourk, dimensional_option, num_inference_ste
     combined_prompt = create_prompt(prompt, cartoon, fourk, dimensional_option)
     
     try:
-        image = pipe(prompt=combined_prompt, num_inference_steps=num_inference_steps, guidance_scale=3).images[0]
+        # Adjust the guidance scale
+        guidance_scale = 2.5
+        
+        image = pipe(prompt=combined_prompt, num_inference_steps=num_inference_steps, guidance_scale=guidance_scale).images[0]
         return image
     except Exception as e:
         st.error(f"Error generating image: {str(e)}")
         return None
-
 @st.cache_resource
 def load_rmbg_pipeline():
     try:
