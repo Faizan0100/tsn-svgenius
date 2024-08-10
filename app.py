@@ -40,7 +40,7 @@ def load_diffusion_pipeline():
     except Exception as e:
         st.error(f"Error loading DiffusionPipeline: {str(e)}")
         return None
-
+@st.cache_data
 def generate_image(prompt, cartoon, fourk, dimensional_option, num_inference_steps):
     pipe = load_diffusion_pipeline()
     if pipe is None:
@@ -62,7 +62,7 @@ def load_rmbg_pipeline():
     except Exception as e:
         st.error(f"Error loading background removal model: {e}")
         return None
-
+@st.cache_data
 def remove_background(image):
     if not isinstance(image, Image.Image):
         raise TypeError("Input image must be a PIL image")
@@ -77,7 +77,7 @@ def remove_background(image):
     elif 'path' in result:
         return Image.open(result['path'])
     raise ValueError("Unexpected result type from background removal pipeline")
-
+@st.cache_data
 def enhance_edges(image, dilation_iterations=2, canny_threshold1=50, canny_threshold2=150, blur_ksize=5, erosion_iterations=1):
     gray_image = np.array(image.convert("L"))
     blurred_image = cv2.GaussianBlur(gray_image, (blur_ksize, blur_ksize), 0)
