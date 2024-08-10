@@ -293,5 +293,3 @@ if "original_image" in st.session_state:
 
         st.success("SVG conversion complete. Click the 'Download SVG' button to save the file.")
 
-    
-           
