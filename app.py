@@ -292,4 +292,4 @@ if "original_image" in st.session_state:
         os.unlink(svg_output_path)
 
         st.success("SVG conversion complete. Click the 'Download SVG' button to save the file.")
-
+print("  ")
