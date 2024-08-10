@@ -1,0 +1,17 @@
+name: svgenius
+channels:
+  - defaults
+  - conda-forge
+dependencies:
+  - python=3.10
+  - pip
+  - numpy
+  - pillow
+  - streamlit
+  - opencv
+  - pip:
+    - torch
+    - huggingface_hub
+    - diffusers
+    - transformers
+    - potrace
