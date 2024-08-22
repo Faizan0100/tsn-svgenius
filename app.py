@@ -15,7 +15,7 @@ import torch
 import huggingface_hub
 from diffusers import DiffusionPipeline
 from transformers.pipelines import pipeline
-from potrace import Bitmap, POTRACE_TURNPOLICY_BLACK
+from potrace import Bitmap, POTRACE_TURNPOLICY_BLACK, POTRACE_TURNPOLICY_MINORITY
 
 # Disable no-member warning for cv2
 # pylint: disable=no-member
@@ -85,20 +85,24 @@ def load_rmbg_pipeline():
         return None
 
 @st.cache_data
-def remove_background(input_image):
+def remove_background(_input_image):
     """Remove the background from the given image."""
-    if not isinstance(input_image, Image.Image):
+    if not isinstance(_input_image, Image.Image):
         raise TypeError("Input image must be a PIL image")
+    
     rmbg_pipe = load_rmbg_pipeline()
     if rmbg_pipe is None:
-        return input_image
-    result = rmbg_pipe(input_image)
+        return _input_image
+    
+    result = rmbg_pipe(_input_image)
+    
     if isinstance(result, Image.Image):
         return result
     if 'image' in result:
         return result['image']
     if 'path' in result:
         return Image.open(result['path'])
+    
     raise ValueError("Unexpected result type from background removal pipeline")
 
 @st.cache_data
@@ -185,6 +189,47 @@ def file_to_svg(input_image, filename, output_dir, svg_fill_type):
         fp.write("</svg>")
     return output_path
 
+def file_to_svg_beta(image, filename):
+    """Convert the image to SVG format using the beta version."""
+    bm = Bitmap(image, blacklevel=0.5)
+    plist = bm.trace(
+        turdsize=2,
+        turnpolicy=POTRACE_TURNPOLICY_MINORITY,
+        alphamax=1,
+        opticurve=False,
+        opttolerance=0.2,
+    )
+    
+    output_path = os.path.join(tempfile.gettempdir(), f"{filename}_beta.svg")
+    with open(output_path, "w", encoding="utf-8") as fp:
+        fp.write(
+            f'''<svg version="1.1" xmlns="http://www.w3.org/2000/svg" '''
+            f'''xmlns:xlink="http://www.w3.org/1999/xlink" '''
+            f'''width="{image.width}" height="{image.height}" '''
+            f'''viewBox="0 0 {image.width} {image.height}">'''
+        )
+        parts = []
+        for curve in plist:
+            fs = curve.start_point
+            parts.append(f"M{fs.x},{fs.y}")
+            for segment in curve.segments:
+                if segment.is_corner:
+                    a = segment.c
+                    b = segment.end_point
+                    parts.append(f"L{a.x},{a.y}L{b.x},{b.y}")
+                else:
+                    a = segment.c1
+                    b = segment.c2
+                    c = segment.end_point
+                    parts.append(f"C{a.x},{a.y} {b.x},{b.y} {c.x},{c.y}")
+            parts.append("z")
+        fp.write(
+            f'''<path stroke="none" fill="black" '''
+            f'''fill-rule="evenodd" d="{"".join(parts)}"/>'''
+        )
+        fp.write("</svg>")
+    return output_path
+
 # Streamlit app
 st.title("Image to SVG Converter")
 
@@ -257,24 +302,27 @@ if "original_image" in st.session_state:
         st.image(edge_enhanced_result, caption="Enhanced Image", use_column_width=True)
 
     # Add option to choose SVG style
-    svg_style = st.radio("Select SVG Style", ("Black and White", "Filled"))
+    svg_style = st.radio("Select SVG Style", ("Black and White", "Filled", "Beta Version"))
     if st.button("Convert to SVG"):
         if "bg_removed_image" in st.session_state:
             current_image = st.session_state.bg_removed_image
         else:
             current_image = st.session_state.original_image
 
-        SVG_FILL_TYPE = "bw" if svg_style == "Black and White" else "filled"
-
         # Create a temporary file to store the SVG
         with tempfile.NamedTemporaryFile(delete=False, suffix='.svg') as tmp_file:
             svg_filename = os.path.basename(tmp_file.name)
-            svg_output_path = file_to_svg(
-                current_image,
-                svg_filename,
-                os.path.dirname(tmp_file.name),
-                SVG_FILL_TYPE
-            )
+            
+            if svg_style == "Beta Version":
+                svg_output_path = file_to_svg_beta(current_image, svg_filename)
+            else:
+                SVG_FILL_TYPE = "bw" if svg_style == "Black and White" else "filled"
+                svg_output_path = file_to_svg(
+                    current_image,
+                    svg_filename,
+                    os.path.dirname(tmp_file.name),
+                    SVG_FILL_TYPE
+                )
 
         # Read the SVG file
         with open(svg_output_path, "r", encoding="utf-8") as file:
@@ -284,7 +332,7 @@ if "original_image" in st.session_state:
         st.download_button(
             label="Download SVG",
             data=svg_content,
-            file_name=f"{svg_filename}_{SVG_FILL_TYPE}.svg",
+            file_name=f"{svg_filename}_{svg_style.lower().replace(' ', '_')}.svg",
             mime="image/svg+xml"
         )
 
@@ -292,4 +340,4 @@ if "original_image" in st.session_state:
         os.unlink(svg_output_path)
 
         st.success("SVG conversion complete. Click the 'Download SVG' button to save the file.")
-print("  ")
+print("")
