@@ -49,8 +49,8 @@ def load_diffusion_pipeline():
             resume_download=True,
         ).to(device)
         return pipe
-    except RuntimeError as e:
-        st.error(f"Error loading DiffusionPipeline: {str(e)}")
+    except RuntimeError as error:
+        st.error(f"Error loading DiffusionPipeline: {str(error)}")
         return None
 
 @st.cache_data
@@ -71,8 +71,8 @@ def generate_image(user_prompt, is_cartoon, is_fourk, dim_option, steps):
             guidance_scale=guidance_scale
         ).images[0]
         return result_image
-    except RuntimeError as e:
-        st.error(f"Error generating image: {str(e)}")
+    except RuntimeError as error:
+        st.error(f"Error generating image: {str(error)}")
         return None
 
 @st.cache_resource
@@ -80,29 +80,29 @@ def load_rmbg_pipeline():
     """Load the background removal pipeline."""
     try:
         return pipeline("image-segmentation", model="briaai/RMBG-1.4", trust_remote_code=True)
-    except RuntimeError as e:
-        st.error(f"Error loading background removal model: {e}")
+    except RuntimeError as error:
+        st.error(f"Error loading background removal model: {error}")
         return None
 
 @st.cache_data
-def remove_background(_input_image):
+def remove_background(input_image):
     """Remove the background from the given image."""
-    if not isinstance(_input_image, Image.Image):
+    if not isinstance(input_image, Image.Image):
         raise TypeError("Input image must be a PIL image")
-    
+
     rmbg_pipe = load_rmbg_pipeline()
     if rmbg_pipe is None:
-        return _input_image
-    
-    result = rmbg_pipe(_input_image)
-    
+        return input_image
+
+    result = rmbg_pipe(input_image)
+
     if isinstance(result, Image.Image):
         return result
     if 'image' in result:
         return result['image']
     if 'path' in result:
         return Image.open(result['path'])
-    
+
     raise ValueError("Unexpected result type from background removal pipeline")
 
 @st.cache_data
@@ -146,12 +146,20 @@ def create_svg_path(curve):
     parts.append(f"M{start_point.x},{start_point.y}")
     for segment in curve.segments:
         if segment.is_corner:
-            a = segment.c
-            b = segment.end_point
-            parts.append(f"L{a.x},{a.y}L{b.x},{b.y}")
+            control_point = segment.c
+            end_point = segment.end_point
+            parts.append(
+                f"L{control_point.x},{control_point.y}L{end_point.x},{end_point.y}"
+            )
         else:
-            a, b, c = segment.c1, segment.c2, segment.end_point
-            parts.append(f"C{a.x},{a.y} {b.x},{b.y} {c.x},{c.y}")
+            control_point1 = segment.c1
+            control_point2 = segment.c2
+            end_point = segment.end_point
+            parts.append(
+                f"C{control_point1.x},{control_point1.y} "
+                f"{control_point2.x},{control_point2.y} "
+                f"{end_point.x},{end_point.y}"
+            )
     parts.append("z")
     return "".join(parts)
 
@@ -169,65 +177,72 @@ def file_to_svg(input_image, filename, output_dir, svg_fill_type):
     )
 
     output_path = os.path.join(output_dir, f"{filename}_{svg_fill_type}.svg")
-    with open(output_path, "w", encoding="utf-8") as fp:
-        fp.write(
+    with open(output_path, "w", encoding="utf-8") as svg_file:
+        svg_file.write(
             f'<svg version="1.1" xmlns="http://www.w3.org/2000/svg" '
             f'width="{bitmap_data.shape[1]}" height="{bitmap_data.shape[0]}">'
         )
         for curve in path:
             svg_path = create_svg_path(curve)
             if svg_fill_type == "bw":
-                fp.write(
+                svg_file.write(
                     f'<path d="{svg_path}" fill="none" '
                     f'stroke="black" stroke-width="1"/>'
                 )
             elif svg_fill_type == "filled":
-                fp.write(
+                svg_file.write(
                     f'<path d="{svg_path}" fill="black" '
                     f'stroke="none" stroke-width="1"/>'
                 )
-        fp.write("</svg>")
+        svg_file.write("</svg>")
     return output_path
 
 def file_to_svg_beta(image, filename):
     """Convert the image to SVG format using the beta version."""
-    bm = Bitmap(image, blacklevel=0.5)
-    plist = bm.trace(
+    bitmap = Bitmap(image, blacklevel=0.5)
+    plist = bitmap.trace(
         turdsize=2,
         turnpolicy=POTRACE_TURNPOLICY_MINORITY,
         alphamax=1,
         opticurve=False,
         opttolerance=0.2,
     )
-    
+
     output_path = os.path.join(tempfile.gettempdir(), f"{filename}_beta.svg")
-    with open(output_path, "w", encoding="utf-8") as fp:
-        fp.write(
-            f'''<svg version="1.1" xmlns="http://www.w3.org/2000/svg" '''
-            f'''xmlns:xlink="http://www.w3.org/1999/xlink" '''
-            f'''width="{image.width}" height="{image.height}" '''
-            f'''viewBox="0 0 {image.width} {image.height}">'''
+    with open(output_path, "w", encoding="utf-8") as svg_file:
+        svg_file.write(
+            f'<svg version="1.1" xmlns="http://www.w3.org/2000/svg" '
+            f'xmlns:xlink="http://www.w3.org/1999/xlink" '
+            f'width="{image.width}" height="{image.height}" '
+            f'viewBox="0 0 {image.width} {image.height}">'
         )
         parts = []
         for curve in plist:
-            fs = curve.start_point
-            parts.append(f"M{fs.x},{fs.y}")
+            start_point = curve.start_point
+            parts.append(f"M{start_point.x},{start_point.y}")
             for segment in curve.segments:
                 if segment.is_corner:
-                    a = segment.c
-                    b = segment.end_point
-                    parts.append(f"L{a.x},{a.y}L{b.x},{b.y}")
+                    control_point = segment.c
+                    end_point = segment.end_point
+                    parts.append(
+                        f"L{control_point.x},{control_point.y}"
+                        f"L{end_point.x},{end_point.y}"
+                    )
                 else:
-                    a = segment.c1
-                    b = segment.c2
-                    c = segment.end_point
-                    parts.append(f"C{a.x},{a.y} {b.x},{b.y} {c.x},{c.y}")
+                    control_point1 = segment.c1
+                    control_point2 = segment.c2
+                    end_point = segment.end_point
+                    parts.append(
+                        f"C{control_point1.x},{control_point1.y} "
+                        f"{control_point2.x},{control_point2.y} "
+                        f"{end_point.x},{end_point.y}"
+                    )
             parts.append("z")
-        fp.write(
-            f'''<path stroke="none" fill="black" '''
-            f'''fill-rule="evenodd" d="{"".join(parts)}"/>'''
+        svg_file.write(
+            f'<path stroke="none" fill="black" '
+            f'fill-rule="evenodd" d="{"".join(parts)}"/>'
         )
-        fp.write("</svg>")
+        svg_file.write("</svg>")
     return output_path
 
 # Streamlit app
@@ -312,7 +327,7 @@ if "original_image" in st.session_state:
         # Create a temporary file to store the SVG
         with tempfile.NamedTemporaryFile(delete=False, suffix='.svg') as tmp_file:
             svg_filename = os.path.basename(tmp_file.name)
-            
+
             if svg_style == "Beta Version":
                 svg_output_path = file_to_svg_beta(current_image, svg_filename)
             else:
