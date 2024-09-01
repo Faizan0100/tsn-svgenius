@@ -1,3 +1,7 @@
+# Docs for the Azure Web Apps Deploy action: https://github.com/Azure/webapps-deploy
+# More GitHub Actions for Azure: https://github.com/Azure/actions
+# More info on Python, GitHub Actions, and Azure App Service: https://aka.ms/python-webapps-actions
+
 name: Build and deploy Python app to Azure Web App - tsn369svgenius
 
 on:
@@ -9,43 +13,42 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
-      
+
       - name: Set up Python version
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
-      
+
       - name: Create and start virtual environment
         run: |
           python -m venv venv
           source venv/bin/activate
       
       - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-      
+        run: pip install -r requirements.txt
+
       # Optional: Add step to run tests here (PyTest, Django test suites, etc.)
-      
-      - name: Create deployment package
-        run: |
-          zip -r deploy.zip . -x "venv/*"
-      
+
+      - name: Zip artifact for deployment
+        run: zip release.zip ./* -r
+
       - name: Upload artifact for deployment jobs
         uses: actions/upload-artifact@v4
         with:
           name: python-app
-          path: deploy.zip
-
+          path: |
+            release.zip
+            !venv/
   deploy:
     runs-on: ubuntu-latest
     needs: build
+    timeout-minutes: 30
     environment:
       name: 'Production'
       url: ${{ steps.deploy-to-webapp.outputs.webapp-url }}
-    
     permissions:
       id-token: write #This is required for requesting the JWT
 
@@ -54,19 +57,21 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: python-app
-      
+
+      - name: Unzip artifact for deployment
+        run: unzip release.zip
+
+
       - name: Login to Azure
         uses: azure/login@v2
         with:
           client-id: ${{ secrets.AZUREAPPSERVICE_CLIENTID_99F79B5F377946EABFF88761CD7E8DF8 }}
           tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_D52DD80FA4A04829A01C663B241E550E }}
           subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_1100B65B6D314F08A0A66D898F2036BC }}
-      
+
       - name: 'Deploy to Azure Web App'
-        uses: azure/webapps-deploy@v3
+        uses: azure/webapps-deploy@v2
         id: deploy-to-webapp
         with:
           app-name: 'tsn369svgenius'
           slot-name: 'Production'
-          package: deploy.zip
-          timeout-minutes: 30
